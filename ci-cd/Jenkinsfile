@@ -1,0 +1,110 @@
+pipeline {
+    agent any
+    environment {
+        GIT_REPO = "https://github.com/devops-automation-jt/my-monitoring-app.git"
+        TCR_HOST = "ccr.ccs.tencentyun.com"
+        TCR_NAMESPACE = "devops-automation-jt"
+        IMAGE_NAME = "my-monitoring-app"
+        K8S_NAMESPACE = "monitoring"
+        DEPLOYMENT_NAME = "flask-app"
+        KUBECONFIG_CREDENTIAL_ID = "kubeconfig-cred"
+    }
+
+    stages {
+        stage('拉代码') {
+            steps {
+                git url: GIT_REPO, branch: 'main'
+                script {
+                    def GIT_COMMIT_SHORT = sh(
+                        script: 'git rev-parse --short HEAD',
+                        returnStdout: true
+                    ).trim()
+                    env.IMAGE_TAG = "git-${GIT_COMMIT_SHORT}"
+                }
+            }
+        }
+
+        stage('配置语法校验') {
+            steps {
+                withCredentials([file(credentialsId: KUBECONFIG_CREDENTIAL_ID, variable: 'KUBECONFIG')]) {
+                    sh '''
+                        echo "检查K8s部署文件语法"
+                        kubectl set image deployment/${DEPLOYMENT_NAME} \
+                            flask-app=${TCR_HOST}/${TCR_NAMESPACE}/${IMAGE_NAME}:${IMAGE_TAG} \
+                            --namespace=${K8S_NAMESPACE} \
+                            --dry-run=client
+                                '''
+                }
+            }
+        }
+
+        stage('代码冒烟测试') {
+            steps {
+                echo '冒烟测试将在"构建镜像"阶段随 docker build 自动执行，测试失败则镜像构建终止'
+            }
+        }
+
+        stage('构建镜像') {
+            steps {
+                sh "docker build -t ${TCR_HOST}/${TCR_NAMESPACE}/${IMAGE_NAME}:${IMAGE_TAG} -f flask-backend/Dockerfile ."
+            }
+        }
+
+        stage('推送镜像') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'docker-repo-cred',
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PWD'
+                    )
+                ]) {
+                    sh "echo ${DOCKER_PWD} | docker login ${TCR_HOST} -u ${DOCKER_USER} --password-stdin"
+                    sh "docker push ${TCR_HOST}/${TCR_NAMESPACE}/${IMAGE_NAME}:${IMAGE_TAG}"
+                }
+            }
+        }
+
+        stage('部署到K8s & 健康检查 & 自动回滚') {
+            steps {
+                withCredentials([file(credentialsId: KUBECONFIG_CREDENTIAL_ID, variable: 'KUBECONFIG')]) {
+                    sh """
+                        #关闭 Jenkins 脚本自动退出
+                        set +e
+                        # 1. 更新镜像
+                        kubectl set image deployment/${DEPLOYMENT_NAME} \
+                            flask-app=${TCR_HOST}/${TCR_NAMESPACE}/${IMAGE_NAME}:${IMAGE_TAG} \
+                            --namespace=${K8S_NAMESPACE}
+
+                        # 2. 健康检查：等待K8s部署完成（Pod 启动就绪）
+                        echo "健康检查中：等待 Pod 就绪
+                        kubectl rollout status deployment/${DEPLOYMENT_NAME} \
+                            --namespace=${K8S_NAMESPACE} \
+                            --timeout=300s
+
+                        # 3. HTTP 探测：验证服务真正可用
+                        echo "HTTP 探测中：验证服务持续可用"
+                        sleep 15 && curl -sf http://${DEPLOYMENT_NAME}.${K8S_NAMESPACE}.svc.cluster.local:8080/ > /dev/null
+                        HTTP_CHECK=\$?
+
+                        # 4. 自动回滚逻辑：任一检查失败，立刻回滚
+                        if [ \$HTTP_CHECK -ne 0 ]; then
+                            echo " 部署失败/健康检查不通过，执行自动回滚！"
+                            kubectl rollout undo deployment/${DEPLOYMENT_NAME} --namespace=${K8S_NAMESPACE}
+                            exit 1
+                        fi
+
+                        echo " 部署成功！当前镜像版本：${IMAGE_TAG}"
+                    """
+                }
+            }
+        }
+    }
+
+    // 构建后自动清理镜像，防止磁盘爆满
+    post {
+        always {
+            sh "docker system prune -f 2>/dev/null || true"
+        }
+    }
+}
