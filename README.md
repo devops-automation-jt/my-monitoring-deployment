@@ -21,7 +21,6 @@ my-monitoring-deployment/
 │   └── flask-service.yaml      # Flask应用Service端口暴露
 ├── ci-cd/                      # CI/CD流水线（预留，后续周任务扩展）
 │   ├── Jenkinsfile             # Jenkins自动化构建/部署流水线
-│   └── .gitlab-ci.yml          # GitLab CI备选方案
 ├── docs/                       # 部署文档（分维度，清晰易懂）
 │   ├── docker-setup.md         # Docker+Compose部署步骤（第三周核心）
 │   ├── k8s-setup.md            # K8s部署步骤（后续扩展）
