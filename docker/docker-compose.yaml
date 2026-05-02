@@ -1,0 +1,53 @@
+# docker-compose.prod.yml（生产部署专用，Bridge模式更规范）
+version: '3.8'
+
+# 自定义bridge网络，所有容器互通
+networks:
+  monitoring-network:
+    driver: bridge
+
+volumes:
+  prometheus-data:
+  grafana-data:
+
+services:
+  flask-app:
+    image: ccr.ccs.tencentyun.com/devops-automation-jt/flask-monitor:v1  # 你的腾讯云镜像
+    container_name: flask-app
+    ports:
+      - "8080:8080"
+    environment:
+      - APP_PORT=8080
+    restart: always
+    networks:
+      - monitoring-network  # 统一bridge网络
+    # 去掉本地调试挂载（镜像内已包含核心代码/依赖）
+    command: ["python", "app.py"]
+
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - /opt/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - monitoring-network
+    restart: always
+    command: ['--config.file=/etc/prometheus/prometheus.yml']
+
+  grafana:
+    image: grafana/grafana:9.5.2
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    networks:
+      - monitoring-network
+    restart: always
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=shell1300
+      - GF_USERS_ALLOW_SIGN_UP=false
