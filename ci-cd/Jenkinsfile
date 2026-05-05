@@ -8,6 +8,8 @@ pipeline {
         K8S_NAMESPACE = "monitoring"
         DEPLOYMENT_NAME = "flask-app"
         KUBECONFIG_CREDENTIAL_ID = "kubeconfig-cred"
+        HOST_IP = "139.199.178.185"
+        APP_PORT = "30080"
     }
 
     stages {
@@ -77,19 +79,20 @@ pipeline {
                             --namespace=${K8S_NAMESPACE}
 
                         # 2. 健康检查：等待K8s部署完成（Pod 启动就绪）
-                        echo "健康检查中：等待 Pod 就绪
+                        echo "健康检查中：等待 Pod 就绪"
                         kubectl rollout status deployment/${DEPLOYMENT_NAME} \
                             --namespace=${K8S_NAMESPACE} \
                             --timeout=300s
 
                         # 3. HTTP 探测：验证服务真正可用
                         echo "HTTP 探测中：验证服务持续可用"
-                        sleep 15 && curl -sf http://${DEPLOYMENT_NAME}.${K8S_NAMESPACE}.svc.cluster.local:8080/ > /dev/null
+                        sleep 15 && curl -sf http://${HOST_IP}:${APP_PORT}/ > /dev/null
                         HTTP_CHECK=\$?
 
                         # 4. 自动回滚逻辑：任一检查失败，立刻回滚
                         if [ \$HTTP_CHECK -ne 0 ]; then
                             echo " 部署失败/健康检查不通过，执行自动回滚！"
+
                             kubectl rollout undo deployment/${DEPLOYMENT_NAME} --namespace=${K8S_NAMESPACE}
                             exit 1
                         fi
