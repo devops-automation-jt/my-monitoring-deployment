@@ -5,6 +5,37 @@ my-monitoring-deployment 是一套云原生持续交付自动化部署解决方案，基于 Jenkins 构
 部署故障自动回滚与 Docker 冗余镜像自动清理能力，无缝对接自研全栈运维监控平台 my-monitoring-app，
 实现 GitHub 代码提交后全自动构建、发布、故障兜底回滚的持续交付闭环。
 
+## 线上流程运行实证
+
+流水线全部在腾讯云服务器上真实运行，以下是三种典型场景的 Jenkins 控制台日志摘要，完整日志见 **[流水线详解](docs/cicd-pipeline.md)**。
+
+### 质量门禁拦截
+```log
+FAILED tests/test_smoke.py::test_flask_startup
+ModuleNotFoundError: No module named 'oss'
+Stage "推送镜像" skipped due to earlier failure(s)
+```
+
+### 健康探测失败自动回滚
+```log
+curl 探测异常，服务不可用
+kubectl rollout undo deployment/flask-app -n monitoring
+deployment.apps/flask-app rolled back
+```
+
+### 全链路平稳发布上线
+```log
+Successfully tagged ...my-monitoring-app:git-74753aa
+deployment "flask-app" successfully rolled out
+Finished: SUCCESS
+```
+
+## 技术亮点
+
+- **K8s 更新策略实战调优与自愈回滚**：结合 hostNetwork 主机网络模式下的端口占用冲突问题，主动切换为 Recreate 重建更新策略，实现服务稳定部署；联动 HTTP 存活探针实时探测服务健康状态，部署异常时自动触发版本回滚，保障线上业务不中断。
+- **全流程质量门禁与自动化触发**：在 Jenkins 流水线中集成配置语法预检与 Pytest 冒烟测试双重质量关卡，前置拦截不通过直接终止流程；对接 GitHub WebHook，代码提交后自动拉起流水线，实现无人值守的持续交付闭环。
+- **Docker 镜像全维度工程化优化**：采用 Alpine 轻量基础镜像与非 root 用户运行，遵循权限最小化原则；依赖与代码分层拷贝充分利用构建缓存，配置国内镜像源解决依赖拉取慢与超时问题；配套冗余镜像自动清理脚本，兼顾构建效率与服务器资源管控。
+
 ## 目录结构
 ```plaintext
 my-monitoring-deployment/
@@ -32,46 +63,20 @@ my-monitoring-deployment/
 │   └── possible_problems.md  # 常见问题
 ```
 
-## 核心技术栈
-| 模块         | 技术选型       | 选型原因                                  |
-|--------------|----------------|-------------------------------------------|
-| 自动化构建   | Jenkins        | 企业级CI/CD工具，支持流水线编排、阶段拦截，插件生态完善 |
-| 容器化       | Docker         | 标准化应用打包，环境隔离，保证开发、测试、生产环境一致性 |
-| 轻量编排     | K3s            | 轻量化K8s发行版，资源占用低，适配个人学习与小规模生产部署 |
-| 容器编排     | Kubernetes     | 原生支持滚动更新、健康探针、版本回滚，是云原生部署标准方案 |
-| 流水线能力   | 冒烟测试/健康检查 | 前置质量门禁，上线前拦截代码语法、依赖异常，降低发布故障风险 |
+## 技术栈与实现
 
-## 核心功能
-1. 全自动CI/CD流水线：GitHub代码提交触发，完成拉代码、语法校验、冒烟测试全流程；
-2. 容器化标准化交付：Docker镜像打包，统一环境依赖，支持Compose本地快速启动；
-3. 云原生滚动部署：基于K3s实现服务无停机滚动更新，保障业务高可用；
-4. 质量门禁拦截：构建阶段集成Pytest冒烟测试，代码异常直接阻断后续推送部署；
-5. 故障自愈兜底：部署后HTTP健康探测失败，自动执行K8s版本回滚至上一稳定版本；
-6. 自动化资源清理：流水线后置自动清理Docker冗余容器与镜像，节省服务器磁盘资源。
+| 技术选型                 | 工程落地应用                                                                          |
+|----------------------|---------------------------------------------------------------------------------|
+| Jenkins              | 编写 Jenkinsfile 声明式流水线，配置语法预检、Pytest 冒烟测试、镜像构建推送阶段，设置质量门禁阻断异常代码                  |
+| Docker               | 编写多阶段构建 Dockerfile，使用 Alpine 轻量基础镜像，非 root 用户运行，通过层缓存优化构建速度                     |
+| K3s / Kubernetes     | 编写 Namespace、Deployment、Service 资源清单，配置 RollingUpdate 策略实现零停机滚动更新，HTTP 存活探针健康检查 |
+| Shell                | 开发镜像构建推送脚本 `push-images.sh`，流水线中集成自动清理冗余镜像脚本                                    |
+| Prometheus / Grafana | 对接自研监控平台，实现 CI/CD 流水线执行状态的可视化与告警（由 my-monitoring-app 承载）                        |
+| Git / GitHub         | 采用功能分支开发模型，拆分 Docker、K8s、CI/CD 独立分支，代码提交触发全自动流水线                                |
 
 ## 快速开始
-### 环境准备
-- Linux虚拟机（CentOS 7+/Ubuntu 20.04+）；
-- Docker 20+ / Docker Compose v2；
-- K3s 轻量级K8s集群；
-- Jenkins 2.400+；
-- Python 3.9+。
 
-### 快速部署
-```bash
-# 克隆代码
-git clone https://github.com/devops-automation-jt/my-monitoring-deployment.git
-cd my-monitoring-deployment
-
-# 构建并推送应用镜像
-bash docker/push-images.sh
-
-# 本地容器化启动测试
-docker-compose -f docker/docker-compose.yaml up -d
-
-# 部署至K3s集群
-kubectl apply -f k8s/
-```
+详细部署步骤、环境依赖与常见问题排查详见 **[部署文档](docs/deployment-guide.md)**。
 
 ### 核心分支说明
 | 分支名                | 功能说明                                  |
