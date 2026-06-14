@@ -15,6 +15,8 @@ spec:
       labels:
         app: flask-app
     spec:
+      imagePullSecrets:
+        - name: ccr-cred
       hostNetwork: true
       securityContext:
         runAsUser: 0
